@@ -1,0 +1,28 @@
+<!DOCTYPE html>
+<html lang="zh"><head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width,initial-scale=1,maximum-scale=1,user-scalable=no">
+<title>CC Terminal</title>
+<style>
+*{margin:0;padding:0;box-sizing:border-box}
+body{background:#1a1a2e;color:#e0e0e0;font-family:-apple-system,'Segoe UI',sans-serif;height:100dvh;display:flex;align-items:center;justify-content:center}
+.box{background:#16213e;border:1px solid rgba(233,69,96,0.2);border-radius:12px;padding:36px;width:320px}
+h2{margin-bottom:24px;font-size:18px;color:#e94560;text-align:center;font-weight:700}
+input{width:100%;background:#1a1a2e;border:1px solid rgba(255,255,255,0.1);color:#e0e0e0;padding:12px;border-radius:8px;font-size:14px;outline:none;margin-bottom:14px}
+input:focus{border-color:rgba(233,69,96,0.5)}
+button{width:100%;background:#e94560;border:none;color:#fff;padding:12px;border-radius:8px;cursor:pointer;font-size:14px;font-weight:600}
+button:hover{opacity:0.9}
+.err{color:#ff6b81;font-size:12px;margin-top:8px;text-align:center;display:none}
+</style></head><body>
+<div class="box">
+<h2>CC Terminal</h2>
+<input id="token" type="password" placeholder="Token..." autofocus>
+<label style="display:flex;align-items:center;gap:5px;margin:6px 2px 10px;font-size:12px;color:#555;cursor:pointer;user-select:none"><input type="checkbox" id="remember" style="width:13px;height:13px;accent-color:#e94560;margin:0"><span style="line-height:13px">记住密码</span></label>
+<button onclick="login()">Enter</button>
+<div class="err" id="err">Token incorrect</div>
+</div>
+<script>
+(function(){var s=localStorage.getItem('cct_saved');if(s){document.getElementById('token').value=s;document.getElementById('remember').checked=true}})();
+async function login(){var t=document.getElementById('token').value;if(document.getElementById('remember').checked)localStorage.setItem('cct_saved',t);else localStorage.removeItem('cct_saved');var r=await fetch('/auth',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({token:t})});if(r.ok)location.href='/terminal';else document.getElementById('err').style.display='block'}
+document.getElementById('token').addEventListener('keydown',function(e){if(e.key==='Enter')login()});
+</script></body></html>

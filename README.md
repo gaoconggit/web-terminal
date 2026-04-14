@@ -1,6 +1,6 @@
 # web-terminal (Go 版)
 
-一个浏览器可访问的多标签 AI 终端，目标是复刻 `E:\prj\mycc\.claude\skills\web-terminal` 的核心能力：
+一个浏览器可访问的多标签 AI 终端，核心能力：
 
 - Token 登录
 - 多标签页（Claude / Codex / pwsh 模板）
@@ -70,7 +70,7 @@ go run .
 
 ## 持久化
 
-默认沿用原 skill 的兼容路径：
+运行时标签页状态持久化路径：
 
 ```text
 <WEB_TERMINAL_CWD>/.claude/skills/web-terminal/runtime-tabs.json
@@ -82,30 +82,6 @@ go run .
 <WEB_TERMINAL_CWD>/.claude/uploads/
 ```
 
-## 与原 Node skill 的对应关系
-
-### 已覆盖
-
-- 登录页 + cookie 认证
-- `/t/<token>` 兼容入口
-- `/health`、`/manifest.json`
-- 多标签终端 UI
-- 运行时创建 / 删除 / 重命名标签页
-- 懒加载终端会话
-- scrollback 缓冲和重连回放
-- 状态指示（Connected / Disconnected）
-- 移动端快捷键栏
-- 文件上传 / 拖拽 / 剪贴板图片
-- Windows 上用 PowerShell + ConPTY 包装非 pwsh 命令，兼容 `claude` / `codex` 这类 shim 命令
-
-### 当前未完全 1:1 复刻的细节
-
-- 原版里更细的移动端 IME / iOS 组合输入桥接
-- 原版的 reader mode、部分手势与滚动增强
-- 更复杂的移动端长按重命名、缩放与重绘策略
-
-这些不是架构缺失，而是前端交互层尚未做完全等价移植。
-
 ## 验证
 
 已在当前环境完成：
@@ -116,7 +92,7 @@ go run .
 
 ## 远程访问
 
-和原 skill 一样，这个 Go 服务本身只负责本地 Web 终端；需要外网访问时可单独配合 cloudflared：
+这个 Go 服务本身只负责本地 Web 终端；需要外网访问时可单独配合 cloudflared：
 
 ```powershell
 cloudflared tunnel --url http://127.0.0.1:7681

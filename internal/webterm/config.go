@@ -106,7 +106,7 @@ func LoadConfig() (Config, error) {
 func defaultConfiguredTabs() []Tab {
 	return []Tab{
 		{ID: "claude", Label: "Claude Code", Cmd: "claude", Args: []string{"--continue", "--dangerously-skip-permissions"}},
-		{ID: "codex", Label: "Codex", Cmd: "codex", Args: []string{"resume", "--last", "--yolo"}},
+		{ID: "codex", Label: "Codex", Cmd: "codex", Args: []string{"--yolo"}},
 	}
 }
 

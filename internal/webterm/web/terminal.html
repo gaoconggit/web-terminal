@@ -1650,7 +1650,7 @@ function connect() {
         if (terms[msg.tab]) {
           var exitTerm = terms[msg.tab];
           var shouldFollowExit = shouldStickTermToBottom(exitTerm) || isTermNearBottom(exitTerm);
-          exitTerm.write('\\r\\n\\x1b[31m[Session ended]\\x1b[0m\\r\\n', function() {
+          exitTerm.write('\r\n\x1b[31m[Session ended]\x1b[0m\r\n', function() {
             if (shouldFollowExit) scrollTermToBottom(exitTerm);
             else scheduleScrollBottomButtonUpdate();
           });

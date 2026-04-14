@@ -62,11 +62,13 @@ go run .
 ```powershell
 $env:WEB_TERMINAL_TABS='[
   {"id":"claude","label":"Claude Code","cmd":"claude","args":["--continue","--dangerously-skip-permissions"]},
-  {"id":"codex","label":"Codex","cmd":"codex","args":["resume","--last","--yolo"]},
+  {"id":"codex","label":"Codex","cmd":"codex","args":["--yolo"]},
   {"id":"pwsh","label":"pwsh","cmd":"pwsh","args":[]}
 ]'
 go run .
 ```
+
+`Codex` defaults to a fresh session because web-terminal already keeps the PTY alive across browser reconnects; forcing `resume --last` can immediately exit if the last Codex conversation no longer exists.
 
 ## 持久化
 

@@ -431,6 +431,7 @@ html[data-display-mode="standalone"] #scroll-bottom-btn{
 <script src="https://cdn.jsdelivr.net/npm/@xterm/xterm@5.5.0/lib/xterm.min.js"></script>
 <script src="https://cdn.jsdelivr.net/npm/@xterm/addon-fit@0.10.0/lib/addon-fit.min.js"></script>
 <script src="https://cdn.jsdelivr.net/npm/@xterm/addon-web-links@0.11.0/lib/addon-web-links.min.js"></script>
+<script src="https://cdn.jsdelivr.net/npm/@xterm/addon-canvas@0.7.0/lib/addon-canvas.min.js"></script>
 <script>
 var TABS = {{.TabsJSON}};
 var TAB_TEMPLATES = {{.TemplatesJSON}};
@@ -473,6 +474,8 @@ var lastTouchActionAt = 0;
 var lastRenameActionAt = 0;
 var zoomSteps = [1, 0.75, 0.6];
 var zoomLevel = 1;
+var MIN_ZOOM = 0.5;
+var MAX_ZOOM = 1.5;
 var tabRedrawState = Object.create(null);
 
 document.body.appendChild(tabTemplateMenuEl);
@@ -1231,6 +1234,15 @@ function mountTab(tab) {
   term.loadAddon(fit);
   if (window.WebLinksAddon) term.loadAddon(new window.WebLinksAddon.WebLinksAddon());
   term.open(panel);
+  // Canvas renderer — DOM renderer on iOS Safari has sub-pixel cell positioning
+  // bugs that manifest as individual glyphs appearing shifted or replaced with
+  // blanks (e.g. "internal" rendering as "int  na "). Canvas draws cells
+  // directly and avoids CSS-layout-induced drift. Keep after term.open().
+  try {
+    if (window.CanvasAddon && window.CanvasAddon.CanvasAddon) {
+      term.loadAddon(new window.CanvasAddon.CanvasAddon());
+    }
+  } catch (e) {}
   term.__ccStickToBottom = true;
   var viewportEl = getTermViewport(term);
   if (viewportEl) {
@@ -1363,10 +1375,21 @@ TABS.slice().forEach(function(tab) {
 });
 
 // ===== Zoom (mobile) =====
-function applyZoom(level) {
+function formatZoomLabel(level) {
+  if (Math.abs(level - 1) < 0.005) return '1x';
+  return (Math.round(level * 100) / 100) + 'x';
+}
+
+function saveZoomPref(level) {
+  try { localStorage.setItem('wt-zoom', String(level)); } catch(e) {}
+}
+
+function applyZoom(level, opts) {
+  level = Math.max(MIN_ZOOM, Math.min(MAX_ZOOM, level));
+  if (Math.abs(level - 1) < 0.005) level = 1;
   zoomLevel = level;
   var zoomBtn = document.getElementById('btn-zoom');
-  if (zoomBtn) zoomBtn.textContent = level === 1 ? '1x' : level + 'x';
+  if (zoomBtn) zoomBtn.textContent = formatZoomLabel(level);
   wrapEl.classList.toggle('zoomed', level !== 1);
   Object.keys(panels).forEach(function(id) {
     var panel = panels[id];
@@ -1382,11 +1405,20 @@ function applyZoom(level) {
       panel.style.height = (100 / level) + '%';
     }
   });
-  try { localStorage.setItem('wt-zoom', String(level)); } catch(e) {}
+  if (!opts || !opts.skipSave) saveZoomPref(level);
 }
 
 function cycleZoom() {
   var idx = zoomSteps.indexOf(zoomLevel);
+  if (idx === -1) {
+    // Zoom is at a non-preset value (from pinch). Snap to the nearest preset first.
+    idx = 0;
+    var best = Math.abs(zoomSteps[0] - zoomLevel);
+    for (var i = 1; i < zoomSteps.length; i++) {
+      var d = Math.abs(zoomSteps[i] - zoomLevel);
+      if (d < best) { best = d; idx = i; }
+    }
+  }
   var next = zoomSteps[(idx + 1) % zoomSteps.length];
   applyZoom(next);
   doFit();
@@ -1563,7 +1595,7 @@ function connect() {
     reconnectAttempts = 0;
     try {
       var saved = parseFloat(localStorage.getItem('wt-zoom'));
-      if (saved && zoomSteps.indexOf(saved) !== -1 && saved !== zoomLevel) applyZoom(saved);
+      if (!isNaN(saved) && saved >= MIN_ZOOM && saved <= MAX_ZOOM && Math.abs(saved - zoomLevel) > 0.005) applyZoom(saved);
     } catch(e) {}
     doFit();
     scheduleScrollBottomButtonUpdate();
@@ -1795,6 +1827,52 @@ if (isMobile) {
       }
     }
   }, { passive: false });
+
+  // --- Pinch-to-zoom (two-finger gesture on terminal area) ---
+  var pinchState = null;
+  function getTouchDistance(t0, t1) {
+    var dx = t0.clientX - t1.clientX;
+    var dy = t0.clientY - t1.clientY;
+    return Math.sqrt(dx * dx + dy * dy);
+  }
+  termWrap.addEventListener('touchstart', function(e) {
+    if (e.touches.length < 2) return;
+    var d = getTouchDistance(e.touches[0], e.touches[1]);
+    if (d < 10) return;
+    pinchState = { startDistance: d, startZoom: zoomLevel };
+    touchDir = null; // cancel any pending single-touch scroll direction
+    e.preventDefault();
+  }, { passive: false });
+  termWrap.addEventListener('touchmove', function(e) {
+    if (!pinchState || e.touches.length < 2) return;
+    e.preventDefault();
+    var d = getTouchDistance(e.touches[0], e.touches[1]);
+    if (d <= 0) return;
+    var next = pinchState.startZoom * (d / pinchState.startDistance);
+    if (Math.abs(next - zoomLevel) < 0.005) return;
+    applyZoom(next, { skipSave: true });
+  }, { passive: false });
+  function endPinch(e) {
+    if (!pinchState) return;
+    // If 2+ fingers remain (e.g. went from 3 fingers to 2), re-baseline instead of ending.
+    if (e && e.touches && e.touches.length >= 2) {
+      var d = getTouchDistance(e.touches[0], e.touches[1]);
+      if (d >= 10) pinchState = { startDistance: d, startZoom: zoomLevel };
+      return;
+    }
+    pinchState = null;
+    saveZoomPref(zoomLevel);
+    doFit();
+    // If one finger is still down, seed the single-touch state so the next
+    // touchmove doesn't jump from the stale touchStartY captured before pinch.
+    if (e && e.touches && e.touches.length === 1) {
+      touchStartY = e.touches[0].clientY;
+      lastTouchY = touchStartY;
+      touchDir = null;
+    }
+  }
+  termWrap.addEventListener('touchend', endPinch);
+  termWrap.addEventListener('touchcancel', endPinch);
 
   // --- Ctrl+C button ---
   document.getElementById('btn-ctrlc').addEventListener('touchstart', function(e) {

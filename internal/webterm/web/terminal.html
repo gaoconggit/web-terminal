@@ -1516,6 +1516,7 @@ function switchTab(tabId) {
 // ===== WebSocket =====
 var dotEl = document.getElementById('status-dot');
 var textEl = document.getElementById('status-text');
+var statusEl = document.getElementById('status-indicator');
 var overlayEl = document.getElementById('overlay');
 var scrollBottomButtonRaf = 0;
 
@@ -1541,10 +1542,12 @@ function setStatus(connected) {
     dotEl.classList.add('on');
     textEl.classList.add('on');
     textEl.textContent = 'Connected';
+    statusEl.style.display = 'none';
   } else {
     dotEl.classList.remove('on');
     textEl.classList.remove('on');
     textEl.textContent = 'Disconnected';
+    statusEl.style.display = '';
   }
 }
 
@@ -1552,6 +1555,7 @@ function connect() {
   var proto = location.protocol === 'https:' ? 'wss:' : 'ws:';
   ws = new WebSocket(proto + '//' + location.host + '/ws');
   textEl.textContent = 'Connecting';
+  statusEl.style.display = '';
 
   ws.onopen = function() {
     setStatus(true);

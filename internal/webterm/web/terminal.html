@@ -1209,9 +1209,21 @@ function mountTab(tab) {
     cursorWidth: 1,
     cursorInactiveStyle: 'none',
     fontSize: isMobile ? 11 : 14,
-    fontFamily: "'Cascadia Code','Fira Code','JetBrains Mono','Menlo','Consolas','Symbols Nerd Font Mono',monospace",
+    // Symbols Nerd Font Mono is moved to the END so it's only used as a
+    // last-resort fallback for nerd-font glyphs that no other font has.
+    // Earlier in the chain it was getting picked for box-drawing chars
+    // (│ ─ ╭ ╮) with metrics that didn't match the cell, leaving gaps.
+    fontFamily: "'Cascadia Code','Fira Code','JetBrains Mono','Menlo','Consolas',monospace,'Symbols Nerd Font Mono'",
     lineHeight: isMobile ? 1.05 : 1.15,
     letterSpacing: isCompactCodexMobile ? -0.35 : 0,
+    // Force the canvas renderer to draw box-drawing chars (│ ─ ╭ ╮ ╰ ╯ etc.)
+    // as canvas primitives instead of pulling glyphs from the font. Without
+    // this, vertical bars only fill ~87% of the cell height (lineHeight 1.15)
+    // and the input-box left/right borders render as barely-visible thin
+    // marks while the top/bottom horizontals look fine — the cursor and
+    // any inline indicators (e.g. Claude Code's ●●● spinner) end up looking
+    // stranded mid-screen.
+    customGlyphs: true,
     theme: {
       background: '#1a1a2e',
       foreground: '#e0e0e0',
@@ -1504,10 +1516,44 @@ function doFit() {
   }
   refreshVisibleTab(activeTab, true);
 }
+
+// Force xterm to re-measure cell metrics with the currently-loaded fonts and drop
+// any glyph atlas built from earlier (possibly fallback-font) measurements. Needed
+// because xterm caches cell dimensions at term.open() time; when a web font like
+// Symbols Nerd Font arrives later via the CDN @font-face, the rendered glyph size
+// no longer matches the cached cell box and the canvas renderer starts leaving
+// fractional-pixel gaps that appear as occasional blank rows in the viewport.
+function remeasureTerminalFont(tabId) {
+  var term = terms[tabId];
+  if (!term) return;
+  try {
+    // Reassigning the option is the documented way to trigger xterm's internal
+    // font re-measure path; plain === comparison would be a no-op setter on some
+    // versions, so force a value change and then restore.
+    var ff = term.options.fontFamily;
+    term.options.fontFamily = ff + ', monospace';
+    term.options.fontFamily = ff;
+  } catch (e) {}
+  if (typeof term.clearTextureAtlas === 'function') {
+    try { term.clearTextureAtlas(); } catch (e) {}
+  }
+  var fit = fitAddons[tabId];
+  if (fit) { try { fit.fit(); } catch (e) {} }
+  try { term.refresh(0, Math.max((term.rows || 1) - 1, 0)); } catch (e) {}
+}
+
+function remeasureAllTerminals() {
+  Object.keys(terms).forEach(remeasureTerminalFont);
+}
+
 requestAnimationFrame(doFit);
 setTimeout(doFit, 100);
 setTimeout(doFit, 500);
-if (document.fonts && document.fonts.ready) document.fonts.ready.then(doFit);
+if (document.fonts && document.fonts.ready) {
+  document.fonts.ready.then(function() {
+    remeasureAllTerminals();
+  });
+}
 
 var resizeTimer;
 window.addEventListener('resize', function() {

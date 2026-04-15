@@ -13,9 +13,16 @@ import (
 )
 
 const (
-	defaultPort          = 7681
-	defaultBind          = "127.0.0.1"
-	defaultMaxScrollback = 50 * 1024
+	defaultPort = 7681
+	defaultBind = "127.0.0.1"
+	// 50KB was too small for TUI apps like Codex/Claude Code: their ratatui
+	// frontend emits a large initial full-screen paint and then only diff
+	// frames. When the buffer truncates before the initial paint, replay
+	// into a fresh xterm on reconnect leaves most rows blank (only the
+	// cells touched by the trailing diffs get painted), producing the
+	// "input on top, recent output on bottom, huge blank band in the
+	// middle" layout. 8MB comfortably covers long sessions.
+	defaultMaxScrollback = 8 * 1024 * 1024
 	defaultMaxUploadSize = 50 * 1024 * 1024
 )
 

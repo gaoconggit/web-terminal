@@ -404,13 +404,25 @@ func (s *Server) handleWSMessage(client *Client, msg wsRequest) {
 		state := s.getOrCreateState(tab)
 		firstSubscription := client.subscribe(tabID)
 		if state.hasSession() || state.statusValue() == "error" {
+			isTUI := isTUICommand(tab.Cmd) && state.hasSession()
 			if firstSubscription {
 				if scrollback := state.scrollbackString(); scrollback != "" {
 					client.send(map[string]any{"type": "scrollback", "tab": tabID, "data": scrollback})
 				}
 			}
 			if state.hasSession() && msg.Cols > 0 && msg.Rows > 0 {
-				state.resize(msg.Cols, msg.Rows)
+				if isTUI && firstSubscription {
+					// After replaying the raw scrollback, nudge the PTY so
+					// the TUI repaints its current frame against the
+					// client's live viewport. This cleans up any residual
+					// mismatch in the replayed tail (e.g. when the buffer
+					// was truncated mid-frame) while keeping the earlier
+					// scrollback intact so the user can still scroll up
+					// through their conversation history.
+					state.resizeWithRepaint(msg.Cols, msg.Rows)
+				} else {
+					state.resize(msg.Cols, msg.Rows)
+				}
 			}
 		} else {
 			if err := s.spawnTab(tab, state, msg.Cols, msg.Rows); err != nil {
@@ -576,6 +588,19 @@ func withTerminalEnv(env []string) []string {
 }
 
 type termSize struct{ cols, rows int }
+
+// isTUICommand reports whether cmd names a full-screen TUI app (Codex /
+// Claude Code) that repaints its UI every frame. On reconnect we force
+// a SIGWINCH for these tabs so the app repaints its current frame
+// against the client's live viewport — see the activate handler.
+func isTUICommand(cmd string) bool {
+	normalized := strings.ToLower(strings.TrimSpace(strings.ReplaceAll(cmd, "\\", "/")))
+	if idx := strings.LastIndex(normalized, "/"); idx != -1 {
+		normalized = normalized[idx+1:]
+	}
+	normalized = strings.TrimSuffix(normalized, ".exe")
+	return normalized == "codex" || normalized == "claude"
+}
 
 func normalizeTerminalSize(cols, rows, fallbackCols, fallbackRows int) termSize {
 	if cols < 10 {
@@ -1112,14 +1137,33 @@ func (t *TabState) argsValue() []string {
 }
 
 func (t *TabState) resize(cols, rows int) {
+	t.applyResize(cols, rows, false)
+}
+
+// resizeWithRepaint applies a resize and guarantees a SIGWINCH even when the
+// requested size already matches. Used on reconnect for TUI tabs so the app
+// repaints its current frame against the client's live viewport, cleaning
+// up any residual mismatch from the replayed raw scrollback.
+func (t *TabState) resizeWithRepaint(cols, rows int) {
+	t.applyResize(cols, rows, true)
+}
+
+func (t *TabState) applyResize(cols, rows int, forceWinch bool) {
 	t.mu.Lock()
 	defer t.mu.Unlock()
 	if t.session == nil {
 		return
 	}
 	size := normalizeTerminalSize(cols, rows, t.cols, t.rows)
-	if size.cols == t.cols && size.rows == t.rows {
+	sameSize := size.cols == t.cols && size.rows == t.rows
+	if sameSize && !forceWinch {
 		return
+	}
+	if sameSize && forceWinch && size.cols > 2 {
+		// Nudge the PTY to a transient size so a SIGWINCH fires, then fall
+		// through to settle at the target size. Codex / Claude Code respond
+		// by recomputing layout and repainting the whole screen.
+		_ = t.session.Resize(size.cols-1, size.rows)
 	}
 	if err := t.session.Resize(size.cols, size.rows); err == nil {
 		t.cols = size.cols

@@ -479,6 +479,8 @@ var zoomLevel = 1;
 var MIN_ZOOM = 0.5;
 var MAX_ZOOM = 1.5;
 var tabRedrawState = Object.create(null);
+var layoutResizeObserver = null;
+var isMacLike = /Mac|iPhone|iPad|iPod/i.test(navigator.platform || navigator.userAgent || '');
 
 document.body.appendChild(tabTemplateMenuEl);
 
@@ -503,6 +505,82 @@ function findTab(tabId) {
 
 function hasTab(tabId) {
   return !!findTab(tabId);
+}
+
+function normalizeTerminalHttpUrl(rawUrl) {
+  try {
+    var url = new URL(String(rawUrl || ''));
+    if (url.protocol !== 'http:' && url.protocol !== 'https:') return null;
+    return url.toString();
+  } catch (err) {
+    return null;
+  }
+}
+
+function openTerminalLink(event, rawUrl) {
+  var safeUrl = normalizeTerminalHttpUrl(rawUrl);
+  if (!safeUrl) {
+    showToast('已拦截非 http(s) 终端链接', 'error', 2600);
+    return;
+  }
+  var modifierHint = isMacLike ? '⌘+Click' : 'Ctrl+Click';
+  var hasModifier = !!(event && (isMacLike ? event.metaKey : event.ctrlKey));
+  if (!hasModifier && !window.confirm('打开外部链接？\n' + safeUrl + '\n\n建议使用 ' + modifierHint + ' 确认。')) {
+    return;
+  }
+  var child = window.open(safeUrl, '_blank', 'noopener,noreferrer');
+  if (!child) {
+    showToast('浏览器拦截了新窗口，请允许弹窗后重试', 'error', 2600);
+  }
+}
+
+function createTerminalLinkHandler(term) {
+  var hintText = (isMacLike ? '⌘' : 'Ctrl') + '+Click 打开链接';
+  return {
+    allowNonHttpProtocols: false,
+    activate: function(event, text) {
+      openTerminalLink(event, text);
+    },
+    hover: function() {
+      if (term && term.element) term.element.setAttribute('title', hintText);
+    },
+    leave: function() {
+      if (term && term.element && term.element.getAttribute('title') === hintText) {
+        term.element.removeAttribute('title');
+      }
+    }
+  };
+}
+
+function loadCanvasRenderer(term) {
+  if (term && term.__ccRenderer === 'canvas') return true;
+  if (!window.CanvasAddon || !window.CanvasAddon.CanvasAddon) return false;
+  try {
+    term.loadAddon(new window.CanvasAddon.CanvasAddon());
+    term.__ccRenderer = 'canvas';
+    return true;
+  } catch (err) {
+    return false;
+  }
+}
+
+function loadPreferredRenderer(term, tabId) {
+  try {
+    if (window.WebglAddon && window.WebglAddon.WebglAddon) {
+      var webglAddon = new window.WebglAddon.WebglAddon();
+      webglAddon.onContextLoss(function() {
+        try { webglAddon.dispose(); } catch (_) {}
+        if (loadCanvasRenderer(term)) {
+          scheduleTabRedraw(tabId);
+          if (activeTab === tabId) showToast('WebGL 已回退到 Canvas 渲染', 'info', 2200);
+        }
+      });
+      term.loadAddon(webglAddon);
+      term.__ccRenderer = 'webgl';
+      return true;
+    }
+  } catch (err) {}
+  return loadCanvasRenderer(term);
 }
 
 function ensureTabRecord(tab) {
@@ -1226,6 +1304,8 @@ function mountTab(tab) {
     // any inline indicators (e.g. Claude Code's ●●● spinner) end up looking
     // stranded mid-screen.
     customGlyphs: true,
+    minimumContrastRatio: 4.5,
+    macOptionClickForcesSelection: true,
     theme: {
       background: '#1a1a2e',
       foreground: '#e0e0e0',
@@ -1240,13 +1320,18 @@ function mountTab(tab) {
       brightCyan: '#5aeaea', brightWhite: '#ffffff',
     },
     scrollback: 10000,
-    allowProposedApi: true,
     convertEol: true,
+    windowsPty: { backend: 'conpty' },
   });
 
   var fit = new window.FitAddon.FitAddon();
   term.loadAddon(fit);
-  if (window.WebLinksAddon) term.loadAddon(new window.WebLinksAddon.WebLinksAddon());
+  term.options.linkHandler = createTerminalLinkHandler(term);
+  if (window.WebLinksAddon) {
+    term.loadAddon(new window.WebLinksAddon.WebLinksAddon(function(event, uri) {
+      openTerminalLink(event, uri);
+    }));
+  }
   term.open(panel);
 
   // Unicode 11 width tables. Without this, xterm's default width table
@@ -1269,22 +1354,7 @@ function mountTab(tab) {
   // rendering). DOM renderer is NOT used as a fallback — it has sub-pixel
   // cell positioning bugs on iOS Safari (e.g. "internal" rendering as
   // "int  na ") that canvas/webgl don't.
-  var rendererLoaded = false;
-  try {
-    if (window.WebglAddon && window.WebglAddon.WebglAddon) {
-      var webglAddon = new window.WebglAddon.WebglAddon();
-      webglAddon.onContextLoss(function() { try { webglAddon.dispose(); } catch (_) {} });
-      term.loadAddon(webglAddon);
-      rendererLoaded = true;
-    }
-  } catch (e) {}
-  if (!rendererLoaded) {
-    try {
-      if (window.CanvasAddon && window.CanvasAddon.CanvasAddon) {
-        term.loadAddon(new window.CanvasAddon.CanvasAddon());
-      }
-    } catch (e) {}
-  }
+  loadPreferredRenderer(term, t.id);
   term.__ccStickToBottom = true;
   var viewportEl = getTermViewport(term);
   if (viewportEl) {
@@ -1354,7 +1424,7 @@ function mountTab(tab) {
       if (e.type !== 'keydown') return true;
       if (e.key === 'Enter' && e.shiftKey) {
         e.preventDefault();
-        sendRaw(tabId, '\\n');
+        sendRaw(tabId, '\n');
         return false;
       }
       // Ctrl+C: copy if selection exists, otherwise send interrupt
@@ -1408,6 +1478,9 @@ function mountTab(tab) {
   // Keyboard input (both desktop and mobile)
   term.onData(function(data) {
     sendRaw(t.id, data);
+  });
+  term.onBinary(function(data) {
+    sendBinary(t.id, data);
   });
   return t;
 }
@@ -1586,11 +1659,25 @@ if (document.fonts && document.fonts.ready) {
 }
 
 var resizeTimer;
+function scheduleLayoutFit(delay) {
+  clearTimeout(resizeTimer);
+  resizeTimer = setTimeout(doFit, typeof delay === 'number' ? delay : 80);
+}
+
 window.addEventListener('resize', function() {
   clearTimeout(resizeTimer);
   if (isMobile) updateMobileCompositionMetrics();
   resizeTimer = setTimeout(doFit, 150);
 });
+if (window.ResizeObserver) {
+  layoutResizeObserver = new window.ResizeObserver(function() {
+    if (isMobile) updateMobileCompositionMetrics();
+    scheduleLayoutFit(80);
+  });
+  [appEl, wrapEl, headerEl, mobileBarEl].forEach(function(el) {
+    if (el) layoutResizeObserver.observe(el);
+  });
+}
 document.addEventListener('visibilitychange', function() {
   if (!document.hidden) scheduleTabRedraw(activeTab);
 });
@@ -1791,9 +1878,25 @@ document.getElementById('reconnect-btn').addEventListener('click', function() {
 });
 
 function sendRaw(tabId, data) {
-  if (ws && ws.readyState === 1) {
-    ws.send(JSON.stringify({ type: 'input', tab: tabId, data: data }));
+  return sendEncodedInput(tabId, data, '');
+}
+
+function sendBinary(tabId, data) {
+  if (!data) return false;
+  try {
+    return sendEncodedInput(tabId, window.btoa(data), 'base64');
+  } catch (err) {
+    console.warn('Failed to encode binary terminal input', err);
+    return false;
   }
+}
+
+function sendEncodedInput(tabId, data, encoding) {
+  if (!tabId || !data || !ws || ws.readyState !== 1) return false;
+  var payload = { type: 'input', tab: tabId, data: data };
+  if (encoding) payload.encoding = encoding;
+  ws.send(JSON.stringify(payload));
+  return true;
 }
 
 function sendMobileShortcut(data) {
@@ -1971,7 +2074,7 @@ if (isMobile) {
   // --- Shift+Enter button: send newline ---
   document.getElementById('btn-newline').addEventListener('touchstart', function(e) {
     e.preventDefault();
-    sendMobileShortcut('\\n');
+    sendMobileShortcut('\n');
   }, { passive: false });
 
   // --- Tab button ---

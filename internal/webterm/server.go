@@ -3,6 +3,7 @@ package webterm
 import (
 	"context"
 	"embed"
+	"encoding/base64"
 	"encoding/json"
 	"errors"
 	"fmt"
@@ -76,6 +77,7 @@ type wsRequest struct {
 	Type        string `json:"type"`
 	Tab         string `json:"tab"`
 	Data        string `json:"data"`
+	Encoding    string `json:"encoding"`
 	Cols        int    `json:"cols"`
 	Rows        int    `json:"rows"`
 	ID          string `json:"id"`
@@ -436,7 +438,12 @@ func (s *Server) handleWSMessage(client *Client, msg wsRequest) {
 		if state == nil {
 			return
 		}
-		state.write(msg.Data)
+		data, err := decodeWSInput(msg)
+		if err != nil {
+			log.Printf("[web-terminal] invalid input payload for %s: %v", tabID, err)
+			return
+		}
+		state.writeBytes(data)
 	case "resize":
 		tabID := sanitizeTabID(msg.Tab)
 		state := s.getState(tabID)
@@ -895,6 +902,21 @@ func (c *Client) sendRaw(payload []byte) {
 	_ = c.conn.WriteMessage(websocket.TextMessage, payload)
 }
 
+func decodeWSInput(msg wsRequest) ([]byte, error) {
+	switch strings.ToLower(strings.TrimSpace(msg.Encoding)) {
+	case "", "utf8", "text":
+		return []byte(msg.Data), nil
+	case "base64", "binary":
+		data, err := base64.StdEncoding.DecodeString(msg.Data)
+		if err != nil {
+			return nil, fmt.Errorf("decode base64 input: %w", err)
+		}
+		return data, nil
+	default:
+		return nil, fmt.Errorf("unsupported input encoding %q", msg.Encoding)
+	}
+}
+
 func (s *Server) persistRuntimeTabsLocked() {
 	defaultLabels := map[string]string{}
 	for _, tab := range s.tabs {
@@ -1172,13 +1194,17 @@ func (t *TabState) applyResize(cols, rows int, forceWinch bool) {
 }
 
 func (t *TabState) write(data string) {
+	t.writeBytes([]byte(data))
+}
+
+func (t *TabState) writeBytes(data []byte) {
 	t.mu.Lock()
 	sess := t.session
 	t.mu.Unlock()
-	if sess == nil || data == "" {
+	if sess == nil || len(data) == 0 {
 		return
 	}
-	_, _ = io.WriteString(sess, data)
+	_, _ = sess.Write(data)
 }
 
 func (t *TabState) close() {

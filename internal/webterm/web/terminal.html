@@ -649,7 +649,7 @@ function requestDeleteTab(tabId) {
     showToast('标签页不存在', 'error', 2000);
     return;
   }
-  if (!window.confirm('确认关闭「' + tab.label + '」吗？\\n关闭后会结束这个标签页里的终端进程。')) {
+  if (!window.confirm('关闭「' + tab.label + '」？\n终端进程将被终止，未保存的内容将丢失。')) {
     return;
   }
   ws.send(JSON.stringify({ type: 'delete_tab', tab: tabId }));

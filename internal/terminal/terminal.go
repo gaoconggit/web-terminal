@@ -36,5 +36,9 @@ func normalizeSize(size Size) Size {
 
 func isPowerShellCommand(cmd string) bool {
 	normalized := strings.ToLower(strings.TrimSpace(strings.ReplaceAll(cmd, "\\", "/")))
-	return normalized == "pwsh" || normalized == "pwsh.exe" || strings.HasSuffix(normalized, "/pwsh") || strings.HasSuffix(normalized, "/pwsh.exe")
+	base := normalized
+	if i := strings.LastIndex(normalized, "/"); i >= 0 {
+		base = normalized[i+1:]
+	}
+	return base == "pwsh" || base == "pwsh.exe" || base == "powershell" || base == "powershell.exe"
 }

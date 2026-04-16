@@ -5,12 +5,32 @@ package terminal
 import (
 	"context"
 	"encoding/base64"
+	"os/exec"
 	"strings"
+	"sync"
 	"unicode/utf16"
 
 	"github.com/UserExistsError/conpty"
 	"golang.org/x/sys/windows"
 )
+
+var (
+	psExe     string
+	psExeOnce sync.Once
+)
+
+// resolvePowerShell returns "pwsh.exe" if PowerShell 7+ is installed,
+// otherwise falls back to the built-in "powershell.exe".
+func resolvePowerShell() string {
+	psExeOnce.Do(func() {
+		if _, err := exec.LookPath("pwsh.exe"); err == nil {
+			psExe = "pwsh.exe"
+		} else {
+			psExe = "powershell.exe"
+		}
+	})
+	return psExe
+}
 
 type windowsSession struct {
 	cpty *conpty.ConPty
@@ -53,12 +73,13 @@ func (s *windowsSession) Wait(ctx context.Context) (int, error) {
 }
 
 func buildWindowsCommandLine(cmd Command) string {
+	ps := resolvePowerShell()
 	if isPowerShellCommand(cmd.Cmd) {
-		return joinWindowsArgs("pwsh.exe", "-NoLogo", "-NoExit")
+		return joinWindowsArgs(ps, "-NoLogo", "-NoExit")
 	}
 	script := buildPowerShellWrapper(cmd.Cmd, cmd.Args)
 	encoded := encodePowerShell(script)
-	return joinWindowsArgs("pwsh.exe", "-NoLogo", "-NoExit", "-EncodedCommand", encoded)
+	return joinWindowsArgs(ps, "-NoLogo", "-NoExit", "-EncodedCommand", encoded)
 }
 
 func buildPowerShellWrapper(command string, args []string) string {

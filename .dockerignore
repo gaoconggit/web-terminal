@@ -1,0 +1,7 @@
+web-terminal.exe
+web-terminal.exe~
+web-terminal
+*.exe
+.env
+.claude/
+.git/

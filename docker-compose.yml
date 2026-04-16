@@ -1,0 +1,13 @@
+services:
+  web-terminal:
+    build: .
+    ports:
+      - "7681:7681"
+    environment:
+      - WEB_TERMINAL_TOKEN=${WEB_TERMINAL_TOKEN:-}
+      - WEB_TERMINAL_CWD=/workspace
+      - WEB_TERMINAL_TABS=${WEB_TERMINAL_TABS:-[{"id":"shell","label":"Shell","cmd":"bash","args":["-l"]}]}
+    volumes:
+      - ${WEB_TERMINAL_CWD:-.}:/workspace
+    working_dir: /workspace
+    restart: unless-stopped

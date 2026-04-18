@@ -2123,7 +2123,7 @@ if (isMobile) {
     }
     // trim trailing empty lines
     while (lines.length && !lines[lines.length - 1].trim()) lines.pop();
-    readerText.textContent = lines.join('\\n');
+    readerText.textContent = lines.join('\n');
     readerOverlay.classList.add('show');
     // scroll to bottom
     readerContent.scrollTop = readerContent.scrollHeight;

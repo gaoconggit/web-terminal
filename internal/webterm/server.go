@@ -582,10 +582,20 @@ func mustJSONJS(v any) template.JS {
 }
 
 func withTerminalEnv(env []string) []string {
+	// Child PTY apps should see the browser terminal's capabilities, not color
+	// controls inherited from whatever parent process launched web-terminal.
+	// In particular, NO_COLOR=1 from our automation shell would make Claude /
+	// Codex render monochrome even though they're attached to a real xterm-like
+	// terminal here.
 	filtered := make([]string, 0, len(env)+2)
 	for _, entry := range env {
 		upper := strings.ToUpper(entry)
-		if strings.HasPrefix(upper, "TERM=") || strings.HasPrefix(upper, "COLORTERM=") {
+		if strings.HasPrefix(upper, "TERM=") ||
+			strings.HasPrefix(upper, "COLORTERM=") ||
+			strings.HasPrefix(upper, "NO_COLOR=") ||
+			strings.HasPrefix(upper, "CLICOLOR=") ||
+			strings.HasPrefix(upper, "CLICOLOR_FORCE=") ||
+			strings.HasPrefix(upper, "FORCE_COLOR=") {
 			continue
 		}
 		filtered = append(filtered, entry)

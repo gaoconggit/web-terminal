@@ -101,8 +101,18 @@ html,body{height:100%;background:#1a1a2e;overflow:hidden;font-family:-apple-syst
 .term-panel .xterm-screen{height:100%!important}
 .term-panel,.term-panel .xterm,.term-panel .xterm-screen,.xterm-viewport{touch-action:pan-y!important}
 .xterm-viewport{overflow-y:auto!important;-webkit-overflow-scrolling:touch;overscroll-behavior:contain}
-.xterm-viewport::-webkit-scrollbar{width:6px}
+.xterm-viewport::-webkit-scrollbar{width:6px;height:6px}
 .xterm-viewport::-webkit-scrollbar-thumb{background:rgba(233,69,96,0.3);border-radius:3px}
+.xterm-viewport::-webkit-scrollbar-track{background:transparent}
+@media (pointer:coarse){
+  .xterm-viewport::-webkit-scrollbar{width:14px;height:14px}
+  .xterm-viewport::-webkit-scrollbar-thumb{
+    background:rgba(233,69,96,0.5);
+    border:4px solid transparent;
+    border-radius:999px;
+    background-clip:padding-box;
+  }
+}
 .xterm .composition-view{
   background:transparent;
   color:#e0e0e0;
@@ -432,8 +442,8 @@ html[data-display-mode="standalone"] #scroll-bottom-btn{
 <script src="https://cdn.jsdelivr.net/npm/@xterm/addon-fit@0.10.0/lib/addon-fit.min.js"></script>
 <script src="https://cdn.jsdelivr.net/npm/@xterm/addon-web-links@0.11.0/lib/addon-web-links.min.js"></script>
 <script src="https://cdn.jsdelivr.net/npm/@xterm/addon-canvas@0.7.0/lib/addon-canvas.min.js"></script>
-<script src="https://cdn.jsdelivr.net/npm/@xterm/addon-webgl@0.19.0/lib/addon-webgl.min.js"></script>
-<script src="https://cdn.jsdelivr.net/npm/@xterm/addon-unicode11@0.9.0/lib/addon-unicode11.min.js"></script>
+<script src="https://cdn.jsdelivr.net/npm/@xterm/addon-webgl@0.18.0/lib/addon-webgl.min.js"></script>
+<script src="https://cdn.jsdelivr.net/npm/@xterm/addon-unicode11@0.8.0/lib/addon-unicode11.min.js"></script>
 <script>
 var TABS = {{.TabsJSON}};
 var TAB_TEMPLATES = {{.TemplatesJSON}};
@@ -507,6 +517,16 @@ function hasTab(tabId) {
   return !!findTab(tabId);
 }
 
+// Codex CLI is Rust+crossterm: without the Kitty keyboard protocol it cannot
+// distinguish Shift+Enter from Enter, so the standard workaround is to send
+// LF (0x0A, i.e. Ctrl+J). Claude Code is Ink (Node) and treats ESC+CR as
+// Alt+Enter → "insert newline". Other tabs default to the Claude convention.
+function shiftEnterSequenceForTab(tabId) {
+  var tab = findTab(tabId);
+  if (tab && tab.cmd === 'codex') return '\n';
+  return '\x1b\r';
+}
+
 function normalizeTerminalHttpUrl(rawUrl) {
   try {
     var url = new URL(String(rawUrl || ''));
@@ -565,18 +585,22 @@ function loadCanvasRenderer(term) {
 }
 
 function loadPreferredRenderer(term, tabId) {
+  // xterm.js 5.x recommends WebGL as the primary renderer and canvas only as
+  // a fallback when WebGL cannot be used.
   try {
     if (window.WebglAddon && window.WebglAddon.WebglAddon) {
       var webglAddon = new window.WebglAddon.WebglAddon();
       webglAddon.onContextLoss(function() {
         try { webglAddon.dispose(); } catch (_) {}
         if (loadCanvasRenderer(term)) {
+          term.__ccWebglAddon = null;
           scheduleTabRedraw(tabId);
           if (activeTab === tabId) showToast('WebGL 已回退到 Canvas 渲染', 'info', 2200);
         }
       });
       term.loadAddon(webglAddon);
       term.__ccRenderer = 'webgl';
+      term.__ccWebglAddon = webglAddon;
       return true;
     }
   } catch (err) {}
@@ -842,12 +866,11 @@ function syncTermStickToBottom(term) {
   term.__ccStickToBottom = isTermNearBottom(term);
 }
 
-// Replace \x1b[2J (erase whole screen — pushes current viewport as blank lines into scrollback)
-// with \x1b[H\x1b[0J (cursor-home + erase-to-end): same visual result, no scrollback pollution.
-// This must be done BEFORE writing to xterm so the replacement runs in-order within the same
-// write chunk, not deferred like a CSI-handler approach would be.
+// Pass server output through verbatim. Rewriting clear-screen sequences caused
+// visual corruption in slash-command UIs; let xterm.js interpret escape
+// sequences exactly as the PTY emitted them.
 function filterTermData(data) {
-  return data.replace(/\x1b\[2J/g, '\x1b[H\x1b[0J');
+  return data;
 }
 
 function scrollTermToBottom(term) {
@@ -1347,13 +1370,8 @@ function mountTab(tab) {
     }
   } catch (e) {}
 
-  // Renderer: prefer WebGL (xterm.js 5.x recommends it as primary; canvas is
-  // documented as fallback only). WebGL avoids the stale-glyph / atlas issues
-  // the canvas addon exhibits in long sessions (xtermjs/xterm.js#3548, #3617).
-  // Fall back to canvas if WebGL2 isn't available (older iOS, forced software
-  // rendering). DOM renderer is NOT used as a fallback — it has sub-pixel
-  // cell positioning bugs on iOS Safari (e.g. "internal" rendering as
-  // "int  na ") that canvas/webgl don't.
+  // Renderer: prefer WebGL (official primary path in xterm.js 5.x) and fall
+  // back to canvas only if WebGL is unavailable or loses context.
   loadPreferredRenderer(term, t.id);
   term.__ccStickToBottom = true;
   var viewportEl = getTermViewport(term);
@@ -1424,7 +1442,7 @@ function mountTab(tab) {
       if (e.type !== 'keydown') return true;
       if (e.key === 'Enter' && e.shiftKey) {
         e.preventDefault();
-        sendRaw(tabId, '\n');
+        sendRaw(tabId, shiftEnterSequenceForTab(tabId));
         return false;
       }
       // Ctrl+C: copy if selection exists, otherwise send interrupt
@@ -1973,16 +1991,36 @@ if (isMobile) {
   var termWrap = document.getElementById('terminal-wrap');
   var SCROLL_PIXELS_PER_PIXEL = 2.2;
   var SCROLL_FAST_SWIPE_BOOST = 0.9;
+  var MOBILE_SCROLLBAR_HIT_SLOP = 28;
+
+  function isTouchOnViewportScrollbar(touch) {
+    if (!touch) return false;
+    var term = terms[activeTab];
+    if (!term) return false;
+    var viewport = getTermViewport(term);
+    if (!viewport) return false;
+    if ((viewport.scrollHeight - viewport.clientHeight) <= 2) return false;
+    var rect = viewport.getBoundingClientRect();
+    if (!rect || rect.width <= 0 || rect.height <= 0) return false;
+    if (touch.clientY < rect.top || touch.clientY > rect.bottom) return false;
+    var gutter = Math.max(18, Math.min(MOBILE_SCROLLBAR_HIT_SLOP, Math.round(rect.width * 0.1)));
+    return touch.clientX >= (rect.right - gutter);
+  }
 
   termWrap.addEventListener('touchstart', function(e) {
     if (e.touches.length !== 1) return;
     touchStartY = e.touches[0].clientY;
     lastTouchY = touchStartY;
     touchDir = null;
+    if (isTouchOnViewportScrollbar(e.touches[0])) {
+      touchDir = 'native';
+      return;
+    }
   }, { passive: true });
 
   termWrap.addEventListener('touchmove', function(e) {
     if (e.touches.length !== 1) return;
+    if (touchDir === 'native') return;
     var curY = e.touches[0].clientY;
     var dy = curY - touchStartY;
 
@@ -2074,7 +2112,7 @@ if (isMobile) {
   // --- Shift+Enter button: send newline ---
   document.getElementById('btn-newline').addEventListener('touchstart', function(e) {
     e.preventDefault();
-    sendMobileShortcut('\n');
+    sendMobileShortcut(shiftEnterSequenceForTab(activeTab));
   }, { passive: false });
 
   // --- Tab button ---
@@ -2177,7 +2215,7 @@ if (isMobile) {
 
   // --- Tap terminal to focus xterm (show keyboard) ---
   function focusTerminalFromTap(e) {
-    if (touchDir === 'v') return; // was scrolling
+    if (touchDir === 'v' || touchDir === 'native') return; // was scrolling / dragging scrollbar
     if (e.target.closest('#mobile-bar') || e.target.closest('#overlay')) return;
     requestActiveTermFocus();
   }

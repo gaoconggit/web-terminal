@@ -74,12 +74,23 @@ func (s *windowsSession) Wait(ctx context.Context) (int, error) {
 
 func buildWindowsCommandLine(cmd Command) string {
 	ps := resolvePowerShell()
-	if isPowerShellCommand(cmd.Cmd) {
-		return joinWindowsArgs(ps, "-NoLogo", "-NoExit")
+	script := buildPowerShellBootstrapScript()
+	if !isPowerShellCommand(cmd.Cmd) {
+		script = buildPowerShellWrapper(cmd.Cmd, cmd.Args)
 	}
-	script := buildPowerShellWrapper(cmd.Cmd, cmd.Args)
 	encoded := encodePowerShell(script)
 	return joinWindowsArgs(ps, "-NoLogo", "-NoExit", "-EncodedCommand", encoded)
+}
+
+func buildPowerShellBootstrapScript() string {
+	return strings.Join([]string{
+		"[Console]::InputEncoding = [System.Text.Encoding]::UTF8",
+		"[Console]::OutputEncoding = [System.Text.Encoding]::UTF8",
+		"$OutputEncoding = [System.Text.Encoding]::UTF8",
+		`Add-Type -Namespace Win32 -Name Native -MemberDefinition '[DllImport("kernel32.dll", SetLastError=true)] public static extern bool SetConsoleCtrlHandler(System.IntPtr HandlerRoutine, bool Add);'`,
+		"[Win32.Native]::SetConsoleCtrlHandler([IntPtr]::Zero, $false) | Out-Null",
+		"Clear-Host",
+	}, "; ")
 }
 
 func buildPowerShellWrapper(command string, args []string) string {
@@ -89,10 +100,7 @@ func buildPowerShellWrapper(command string, args []string) string {
 		parts = append(parts, psQuote(arg))
 	}
 	return strings.Join([]string{
-		"[Console]::InputEncoding = [System.Text.Encoding]::UTF8",
-		"[Console]::OutputEncoding = [System.Text.Encoding]::UTF8",
-		"$OutputEncoding = [System.Text.Encoding]::UTF8",
-		"Clear-Host",
+		buildPowerShellBootstrapScript(),
 		"& " + strings.Join(parts, " "),
 	}, "; ")
 }
